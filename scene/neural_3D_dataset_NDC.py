@@ -225,13 +225,17 @@ class Neural3D_NDC_Dataset(Dataset):
         eval_index=0,
         sphere_scale=1.0,
     ):
-        self.img_wh = (
-            int(1352 / downsample),
-            int(1014 / downsample),
-        )  # According to the neural 3D paper, the default resolution is 1024x768
+        # Original > hardcoded
+        # self.img_wh = (
+        #     int(1352 / downsample),
+        #     int(1014 / downsample),
+        # )  # According to the neural 3D paper, the default resolution is 1024x768
+        # CUSTOM > automatic
         self.root_dir = datadir
         self.split = split
-        self.downsample = 2704 / self.img_wh[0]
+        self.downsample = downsample + 1
+        self.set_image_wh()
+
         self.is_stack = is_stack
         self.N_vis = N_vis
         self.time_scale = time_scale
@@ -297,10 +301,28 @@ class Neural3D_NDC_Dataset(Dataset):
         self.image_paths, self.image_poses, self.image_times, N_cam, N_time = self.load_images_path(videos, self.split)
         self.cam_number = N_cam
         self.time_number = N_time
+    
     def get_val_pose(self):
         render_poses = self.val_poses
         render_times = torch.linspace(0.0, 1.0, render_poses.shape[0]) * 2.0 - 1.0
         return render_poses, self.time_scale * render_times
+    
+    def set_image_wh(self):
+        videos = glob.glob(os.path.join(self.root_dir, "cam*"))
+        video_path = videos[0].split('.')[0]
+        image_path = os.path.join(video_path, "images")
+        for ext in [".jpg", ".png", ".jpeg"]:
+            test_paths = glob.glob(os.path.join(image_path, f"*{ext}"))
+            if len(test_paths) > 0:
+                break
+        assert len(test_paths) > 0, "No images or Invalid image extension"
+        test_path = test_paths[0]
+        test_image = cv2.imread(test_path)
+        h, w = test_image.shape[:-1]    # H,W,C
+        self.img_wh = (int(w/self.downsample), int(h/self.downsample))
+        print(f"Set image w = {self.img_wh[0]} h = {self.img_wh[1]}")
+        # ST-NeRF : downsample x2 (default) : w=960, h=540
+
     def load_images_path(self,videos,split):
         image_paths = []
         image_poses = []
@@ -321,6 +343,7 @@ class Neural3D_NDC_Dataset(Dataset):
             video_images_path = video_path.split('.')[0]
             image_path = os.path.join(video_images_path,"images")
             video_frames = cv2.VideoCapture(video_path)
+            
             if not os.path.exists(image_path):
                 print(f"no images saved in {image_path}, extract images from video.")
                 os.makedirs(image_path)
@@ -364,14 +387,17 @@ class Neural3D_NDC_Dataset(Dataset):
                 #     video_data_save[count] = img.permute(1,2,0)
                 #     count += 1
         return image_paths, image_poses, image_times, N_cams, N_time
+    
     def __len__(self):
         return len(self.image_paths)
+    
     def __getitem__(self,index):
         img = Image.open(self.image_paths[index])
         img = img.resize(self.img_wh, Image.LANCZOS)
 
         img = self.transform(img)
         return img, self.image_poses[index], self.image_times[index]
+    
     def load_pose(self,index):
         return self.image_poses[index]
 
