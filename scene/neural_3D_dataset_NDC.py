@@ -223,7 +223,9 @@ class Neural3D_NDC_Dataset(Dataset):
         bd_factor=0.75,
         eval_step=1,
         eval_index=0,
+        train_index=[],
         sphere_scale=1.0,
+        stnerf=False
     ):
         # Original > hardcoded
         # self.img_wh = (
@@ -234,7 +236,7 @@ class Neural3D_NDC_Dataset(Dataset):
         self.root_dir = datadir
         self.split = split
         self.downsample = downsample + 1
-        self.set_image_wh()
+        self.set_image_wh() if not stnerf else self.set_image_wh_stnerf()
 
         self.is_stack = is_stack
         self.N_vis = N_vis
@@ -245,6 +247,9 @@ class Neural3D_NDC_Dataset(Dataset):
         self.bd_factor = bd_factor
         self.eval_step = eval_step
         self.eval_index = eval_index
+        self.train_index = train_index
+        print("[DEBUG] : train_index = ", train_index)
+
         self.blender2opencv = np.eye(4)
         self.transform = T.ToTensor()
 
@@ -255,8 +260,12 @@ class Neural3D_NDC_Dataset(Dataset):
         self.ndc_ray = True
         self.depth_data = False
 
-        self.load_meta()
-        print(f"meta data loaded, total image:{len(self)}")
+        if stnerf:
+            self.load_meta_stnerf()
+            print(f"meta data loaded, total image:{len(self)} : ST-NeRF")
+        else:
+            self.load_meta()
+            print(f"meta data loaded, total image:{len(self)}")
 
     def load_meta(self):
         """
@@ -301,7 +310,46 @@ class Neural3D_NDC_Dataset(Dataset):
         self.image_paths, self.image_poses, self.image_times, N_cam, N_time = self.load_images_path(videos, self.split)
         self.cam_number = N_cam
         self.time_number = N_time
-    
+
+    def load_meta_stnerf(self):
+        """
+        Load meta data from the dataset.
+        """
+        # Read poses and video file paths.
+        poses_arr = np.load(os.path.join(self.root_dir, "poses_bounds_colmap.npy"))
+        poses = poses_arr[:, :-2].reshape([-1, 3, 5])  # (N_cams, 3, 5)
+        self.near_fars = poses_arr[:, -2:]
+        videos = glob.glob(os.path.join(self.root_dir, "images_2/cam*"))
+        videos = sorted(videos)
+        
+        assert len(videos) == poses_arr.shape[0]
+
+        H, W, focal = poses[0, :, -1]
+        focal = focal / self.downsample
+        self.focal = [focal, focal]
+        poses = np.concatenate([poses[..., 1:2], -poses[..., :1], poses[..., 2:4]], -1)
+
+        # Sample N_views poses for validation - NeRF-like camera trajectory.
+        N_views = 300
+        self.val_poses = get_spiral(poses, self.near_fars, N_views=N_views)
+        # self.val_poses = self.directions
+        W, H = self.img_wh
+        poses_i_train = []
+
+        for i in range(len(poses)):
+            if self.train_index != []:
+                if i in self.train_index:
+                    poses_i_train.append(i)
+            else:
+                if i != self.eval_index:
+                    poses_i_train.append(i)
+        self.poses = poses[poses_i_train]
+        self.poses_all = poses
+        img_dirs = videos   # naming ...
+        self.image_paths, self.image_poses, self.image_times, N_cam, N_time = self.load_images_path_stnerf(img_dirs, self.split)
+        self.cam_number = N_cam
+        self.time_number = N_time
+
     def get_val_pose(self):
         render_poses = self.val_poses
         render_times = torch.linspace(0.0, 1.0, render_poses.shape[0]) * 2.0 - 1.0
@@ -320,6 +368,23 @@ class Neural3D_NDC_Dataset(Dataset):
         test_image = cv2.imread(test_path)
         h, w = test_image.shape[:-1]    # H,W,C
         self.img_wh = (int(w/self.downsample), int(h/self.downsample))
+        print(f"Set image w = {self.img_wh[0]} h = {self.img_wh[1]}")
+        # ST-NeRF : downsample x2 (default) : w=960, h=540
+    
+    def set_image_wh_stnerf(self):
+        # videos = glob.glob(os.path.join(self.root_dir, "cam*"))
+        # video_path = videos[0].split('.')[0]
+        # image_path = os.path.join(video_path, "images")
+        # for ext in [".jpg", ".png", ".jpeg"]:
+        #     test_paths = glob.glob(os.path.join(image_path, f"*{ext}"))
+        #     if len(test_paths) > 0:
+        #         break
+        # assert len(test_paths) > 0, "No images or Invalid image extension"
+        # test_path = test_paths[0]
+        # test_image = cv2.imread(test_path)
+        # h, w = test_image.shape[:-1]    # H,W,C
+        # self.img_wh = (int(w/self.downsample), int(h/self.downsample))
+        self.img_wh = (960, 540)
         print(f"Set image w = {self.img_wh[0]} h = {self.img_wh[1]}")
         # ST-NeRF : downsample x2 (default) : w=960, h=540
 
@@ -372,6 +437,10 @@ class Neural3D_NDC_Dataset(Dataset):
                 if this_count >=countss:break
                 image_paths.append(os.path.join(image_path,path))
                 pose = np.array(self.poses_all[index])
+
+                if "taekwondo" in path:
+                    pose[:3, 3] *= 0.1
+                
                 R = pose[:3,:3]
                 R = -R
                 R[:,0] = -R[:,0]
@@ -386,6 +455,47 @@ class Neural3D_NDC_Dataset(Dataset):
 
                 #     video_data_save[count] = img.permute(1,2,0)
                 #     count += 1
+        return image_paths, image_poses, image_times, N_cams, N_time
+
+    def load_images_path_stnerf(self,img_dirs,split):
+        image_paths = []
+        image_poses = []
+        image_times = []
+        N_cams = 0
+        N_time = 0
+        # countss = 300
+        print("[DEBUG] : load_images_path_stnerf : ", img_dirs)
+
+        for index, img_dir in enumerate(img_dirs):
+            
+            if index == self.eval_index:
+                if split =="train":
+                    continue
+            else:
+                if split == "train":
+                    if self.train_index != []:
+                        if index not in self.train_index:
+                            continue
+                if split == "test":
+                    continue
+            print("[DEBUG] : valid training index = ", index, img_dir)
+            N_cams +=1
+            
+            img_paths = sorted(glob.glob(os.path.join(img_dir, "*.png")))
+            countss = len(img_paths)
+
+            for i, img_path in enumerate(img_paths):
+                image_paths.append(img_path)
+                pose = np.array(self.poses_all[index])
+                R = pose[:3, :3]
+                R = -R
+                R[:,0] = -R[:,0]
+                T = -pose[:3, 3].dot(R)
+                image_times.append(i/countss)
+                image_poses.append((R, T)) 
+                
+            N_time = len(image_paths)
+
         return image_paths, image_poses, image_times, N_cams, N_time
     
     def __len__(self):

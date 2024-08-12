@@ -439,10 +439,13 @@ def add_points(pointsclouds, xyz_min, xyz_max):
     return pointsclouds
     # breakpoint()
     # new_
-def readdynerfInfo(datadir,use_bg_points,eval):
+def readdynerfInfo(datadir,use_bg_points,eval,stnerf=False, train_index=[]):
     # loading all the data follow hexplane format
     # ply_path = os.path.join(datadir, "points3D_dense.ply")
-    ply_path = os.path.join(datadir, "points3D_downsample2.ply")
+    # ply_path = os.path.join(datadir, "points3D_downsample2.ply")
+
+    ply_path = os.path.join(datadir, "points3D_few.ply")
+    
     from scene.neural_3D_dataset_NDC import Neural3D_NDC_Dataset
     train_dataset = Neural3D_NDC_Dataset(
     datadir,
@@ -451,7 +454,9 @@ def readdynerfInfo(datadir,use_bg_points,eval):
     time_scale=1,
     scene_bbox_min=[-2.5, -2.0, -1.0],
     scene_bbox_max=[2.5, 2.0, 1.0],
-    eval_index=0,
+    eval_index=0 if not stnerf else 7,
+    train_index=train_index,
+    stnerf=stnerf
         )    
     test_dataset = Neural3D_NDC_Dataset(
     datadir,
@@ -460,7 +465,9 @@ def readdynerfInfo(datadir,use_bg_points,eval):
     time_scale=1,
     scene_bbox_min=[-2.5, -2.0, -1.0],
     scene_bbox_max=[2.5, 2.0, 1.0],
-    eval_index=0,
+    eval_index=0 if not stnerf else 7,
+    train_index=train_index,
+    stnerf=stnerf
         )
     train_cam_infos = format_infos(train_dataset,"train")
     val_cam_infos = format_render_poses(test_dataset.val_poses,test_dataset)

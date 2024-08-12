@@ -24,7 +24,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], load_coarse=False):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], load_coarse=False, sparse=False):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -42,6 +42,11 @@ class Scene:
         self.train_cameras = {}
         self.test_cameras = {}
         self.video_cameras = {}
+        print("[DEBUG] : ", args.source_path)
+        use_stnerf = True if ("walking" in args.source_path or "taekwondo" in args.source_path or "boxing" in args.source_path) else False
+        train_index = [5,6,8,9] if use_stnerf and sparse else []
+        print("[DEBUG] : ST-NeRF sparse mode ; train_index = ", train_index)
+
         if os.path.exists(os.path.join(args.source_path, "sparse")):
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval, args.llffhold)
             dataset_type="colmap"
@@ -49,8 +54,9 @@ class Scene:
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval, args.extension)
             dataset_type="blender"
-        elif os.path.exists(os.path.join(args.source_path, "poses_bounds.npy")):
-            scene_info = sceneLoadTypeCallbacks["dynerf"](args.source_path, args.white_background, args.eval)
+        elif os.path.exists(os.path.join(args.source_path, "poses_bounds_kplanes_v7.npy")):
+            print("[DEBUG] : DyNeRF scene load")
+            scene_info = sceneLoadTypeCallbacks["dynerf"](args.source_path, args.white_background, args.eval, stnerf=use_stnerf, train_index=train_index)
             dataset_type="dynerf"
         elif os.path.exists(os.path.join(args.source_path,"dataset.json")):
             scene_info = sceneLoadTypeCallbacks["nerfies"](args.source_path, False, args.eval)
